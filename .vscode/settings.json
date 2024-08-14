@@ -1,0 +1,10 @@
+{
+    "[cpp]": {
+        "editor.formatOnPaste": true,
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true
+    },
+    "files.associations": {
+        "system_error": "cpp"
+    }
+}

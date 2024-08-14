@@ -5,9 +5,8 @@
 #include <ESP8266HTTPUpdateServer.h>
 #include <pt.h>
 #include <secrets.h>
-#include <SerialRedirect.h>
 
-static struct pt ptHandleIncomingMessage, ptInitWlan, ptMakeSerialConnection; 
+static struct pt ptHandleIncomingMessage, ptInitWlan, ptPingPong;
 
 // Web server on port 80
 ESP8266WebServer httpServer(80);
@@ -21,171 +20,230 @@ static bool serialConnected = false;
 // Placeholder battery voltage variables
 float motorBatteryVoltage = 0.0;
 float computeBatteryVoltage = 0.0;
+bool showBatteryWarning = false;
 // Task sleep times
-const static unsigned int handleMessageWAIT = 4000;
-const static unsigned int initWlanWAIT = 1000;
+const static unsigned int handleMessageWait = 4000;
+const static unsigned int initWlanWait = 1000;
 
-// Function declarations
-void handleRoot();
-void handleModeChange();
-void handleCamera();
-void updateBatteryVoltages();
-void handleIncomingMessage(String message);
-void sendCommandToArduino(String command);
-/**
- * Utility functions
- */
-void printToSerial(String message) {
-    printf("%s\n", message.c_str());
+void handleRoot()
+{
+  String html = "<html>"
+                "<head>"
+                "<title>Robot Car Guard</title>"
+                "<script>"
+                "function refreshImage() {"
+                "  var img = document.getElementById('cameraImage');"
+                "  img.src = '/camera?' + new Date().getTime();"
+                "}"
+                "setInterval(refreshImage, 1000);" // Refresh the image every second
+                "</script>"
+                "</head>"
+                "<body>"
+                "<h1>Robot Car Guard</h1>"
+                "<p>Current Mode: " +
+                mode + "</p>"
+                       "<p>"
+                       "<button onclick=\"location.href='/mode/toy'\">Toy/Map Mode</button>"
+                       "<button onclick=\"location.href='/mode/guard'\">Guard Mode</button>"
+                       "</p>"
+                       "<p>Motor Battery Voltage: " +
+                String(motorBatteryVoltage) + " V</p>"
+                                              "<p>Compute Battery Voltage: " +
+                String(computeBatteryVoltage) + " V</p>"
+                                                "<p><img id='cameraImage' src='/camera' width='320' height='240'></p>";
+
+  if (showBatteryWarning)
+  {
+    html += "<p style='color:red'>Battery Voltage Low!</p>";
+  }
+
+  html += "</body>"
+          "</html>";
+
+  httpServer.send(200, "text/html", html);
 }
 
-void printToSerial(String id, String message) {
-    printf("%s: %s\n", id.c_str(), message.c_str());
+void receivePicture()
+{
+  if (Serial.available())
+  {
+    String imageData = Serial.readStringUntil('\n');
+    httpServer.send(200, "text/html", "<html><body><img src='data:image/jpeg;base64," + imageData + "'></body></html>"); // Send image data to client
+  }
+  else
+  {
+    httpServer.send(200, "text/html", "<html><body><p>Image data not available</p></body></html>");
+  }
 }
 
-/**
- * Business logic functions
- */
-void handleRoot() {
-    String html = "<html>\
-                    <head>\
-                      <title>Robot Car Guard</title>\
-                      <meta http-equiv=\"refresh\" content=\"1\">\
-                    </head>\
-                    <body>\
-                      <h1>Robot Car Guard</h1>\
-                      <p>Current Mode: " + mode + "</p>\
-                      <p>\
-                        <button onclick=\"location.href='/mode/toy'\">Toy/Map Mode</button>\
-                        <button onclick=\"location.href='/mode/guard'\">Guard Mode</button>\
-                      </p>\
-                      <p>Motor Battery Voltage: " + String(motorBatteryVoltage) + " V</p>\
-                      <p>Compute Battery Voltage: " + String(computeBatteryVoltage) + " V</p>\
-                      <p><img src='/camera' width='320' height='240'></p>\
-                    </body>\
-                  </html>";
-    httpServer.send(200, "text/html", html);
+void receiveBatteryVoltages(String message)
+{
+  int commaIndex = message.indexOf(',');
+  motorBatteryVoltage = message.substring(0, commaIndex).toFloat();
+  computeBatteryVoltage = message.substring(commaIndex + 1).toFloat();
+  if (motorBatteryVoltage < 6.0 || computeBatteryVoltage < 6.0)
+  {
+    showBatteryWarning = true;
+  }
 }
 
-void handleModeChange() {
-    if (httpServer.uri() == "/mode/toy") {
-        mode = "toy";
-        printToSerial("1:mode_toy");
-    } else if (httpServer.uri() == "/mode/guard") {
-        mode = "guard";
-        printToSerial("1:mode_guard");
-    }
-    handleRoot();  // Refresh the webpage
-}
-
-void handleCamera() {
-    // the arduino will offer ~1/sec a new picture
-
-    if (Serial.available()) {
-        String imageData = Serial.readStringUntil('\n');
-        httpServer.send(200, "image/jpeg", imageData);  // Send image data to client
-    } else {
-        httpServer.send(200, "image/jpeg", "<image data not available>");
-    }
-}
-
-void updateBatteryVoltages() {
-    if (Serial.available()) {
-        String data = Serial.readStringUntil('\n');
-        int commaIndex = data.indexOf(',');
-        motorBatteryVoltage = data.substring(0, commaIndex).toFloat();
-        computeBatteryVoltage = data.substring(commaIndex + 1).toFloat();
-    }
-}
-
-PT_THREAD(handleIncomingMessage(struct pt *pt)) {
+PT_THREAD(handleIncomingMessage(struct pt *pt))
+{
+  unsigned long startTime = millis(); // Initialize startTime
   PT_BEGIN(pt);
-  while (Serial.available()) {
+
+  while (1)
+  {
+    if (Serial.available())
+    {
       String message = Serial.readStringUntil('\n');
-      if (message == "ping") {
-          printToSerial("ESP: pong");  // Respond to ping with pong
-      } else if (message.startsWith("battery_level=")) {
-          // Parse and update battery levels from the incoming message
-          int commaIndex = message.indexOf(',');
-          motorBatteryVoltage = message.substring(0, commaIndex).toFloat();
-          computeBatteryVoltage = message.substring(commaIndex + 1).toFloat();
-      } else if (message == "picture_start") {
-          // Send the picture to the client
-          handleCamera();
-      } else {
-          printToSerial("ESP: Unknown command: " + message);
+      message.trim();
+      if (message.startsWith("battery_level="))
+      {
+        receiveBatteryVoltages(message);
       }
-      // Wait for 4 seconds (4000 milliseconds) before continuing// Start the timer
-      unsigned int startTime = millis();
-      PT_WAIT_UNTIL(pt, millis() - startTime >= handleMessageWAIT);
+      else if (message == "picture_start")
+      {
+        Serial.println("Got command: picture_start");
+        receivePicture();
+      }
+      else if (message == "ping")
+      {
+        // Do silly Arduino doesn't know weve already spoken of this...
+        Serial.println("pong");
+      }
+      else
+      {
+        Serial.println("msg: Unknown command: " + message);
+      }
+    }
+    PT_WAIT_UNTIL(pt, millis() - startTime >= handleMessageWait);
+    // PT_YIELD_UNTIL(pt, millis() - startTime >= handleMessageWait);
+    startTime = millis();
   }
   PT_END(pt);
 }
 
-PT_THREAD(initWlan(struct pt *pt)) {
-  PT_BEGIN(pt);
-  // Connect to WiFi network
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {      
-      Serial.print(".");
-      unsigned int startTime = millis();
-      PT_WAIT_UNTIL(pt, millis() - startTime >= initWlanWAIT);
+void handleModeChange()
+{
+  String newMode;
+  if (httpServer.uri() == "/mode/toy")
+  {
+    newMode = "toy";
   }
-  wlanConnected = true;
-  printToSerial("\nWiFi connected");
-  printToSerial("IP address: " + WiFi.localIP().toString());
-  PT_END(pt);
-}
+  else if (httpServer.uri() == "/mode/guard")
+  {
+    newMode = "guard";
+  }
 
-PT_THREAD(makeSerialConnection(struct pt *pt)) {
-  PT_BEGIN(pt);
-  Serial.begin(9600);
-  while (!Serial) {
-      PT_WAIT_UNTIL(pt, Serial);
+  if (newMode != mode)
+  {
+    mode = newMode;
+    Serial.println("mode_change:" + mode);
   }
-  PT_END(pt);
+  // Redirect back to the root page
+  httpServer.sendHeader("Location", "/");
+  httpServer.send(303);
 }
 
 // setup the httpServer routes
-void initHttpServer() {
+void initHttpServer()
+{
+  Serial.println("initHttp:start");
   httpServer.on("/", handleRoot);
   httpServer.on("/mode/toy", handleModeChange);
   httpServer.on("/mode/guard", handleModeChange);
-  httpServer.on("/camera", handleCamera);
   httpServer.begin();
-  Serial.println("SHTTP server started!");
+  Serial.println("initHttp:ok");
 }
 
-void setup() {
+PT_THREAD(initWlan(struct pt *pt))
+{
+  PT_BEGIN(pt);
+  unsigned int startTime = millis();
+
+  WiFi.begin(ssid, password);
+  Serial.println("initWlan:start");
+  while (1)
+  {
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      // Serial.print(".");
+      //  PT_YIELD_UNTIL(pt, millis() - startTime >= 1000);
+      PT_WAIT_UNTIL(pt, millis() - startTime >= initWlanWait);
+      startTime = millis();
+    }
+    else
+    {
+      wlanConnected = true;
+      initHttpServer();
+      Serial.println("initWlan:ok");
+      Serial.println("msg: WLAN connected: IP address: " + WiFi.localIP().toString());
+      PT_EXIT(pt);
+    }
+  }
+  PT_END(pt);
+}
+
+PT_THREAD(pingPong(struct pt *pt))
+{
+  PT_BEGIN(pt);
+  unsigned int startTime = millis(); // Initialize startTime once at the beginning of the loop
+
+  while (1)
+  {
+    if (Serial.available())
+    {
+      // Serial.println("serial available");
+      String message = Serial.readStringUntil('\n');
+      message.trim();
+      if (message == "ping")
+      {
+        Serial.println("pong");
+        Serial.println("pong");
+        delay(2000);
+        Serial.println("pong"); // Respond to ping with pong
+        serialConnected = true;
+        PT_EXIT(pt); // Exit the protothread
+      }
+    }
+    startTime = millis();
+    // PT_WAIT_UNTIL(pt, millis() - startTime >= 2500); // Wait 2500ms before looping again
+    PT_YIELD_UNTIL(pt, millis() - startTime >= 1000);
+    startTime = millis();
+  }
+
+  PT_END(pt);
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  delay(1000);
+  PT_INIT(&ptPingPong);
   PT_INIT(&ptInitWlan);
   PT_INIT(&ptHandleIncomingMessage);
-  // Set up the serial connection
-  PT_INIT(&ptMakeSerialConnection);
-
-  // Set up the web server routes
-  httpServer.on("/", handleRoot);
-  httpServer.on("/mode/toy", handleModeChange);
-  httpServer.on("/mode/guard", handleModeChange);
-  httpServer.on("/camera", handleCamera);
-
-  // Start the web server
-  httpServer.begin();
-  Serial.println("HTTP server started!");
 }
 
-
-void loop() {
-  if (!serialConnected) {
-    PT_SCHEDULE(makeSerialConnection(&ptMakeSerialConnection));
+void loop()
+{
+  if (!serialConnected)
+  {
+    PT_SCHEDULE(pingPong(&ptPingPong));
   }
-  if (!wlanConnected) {
-    PT_SCHEDULE(initWlan(&ptInitWlan));
-  } else {
-    // Handle incoming HTTP requests
-    httpServer.handleClient();
-    // updateBatteryVoltages();
-
-    // Handle incoming messages from Arduino
-    PT_SCHEDULE(handleIncomingMessage(&ptHandleIncomingMessage));
+  else
+  {
+    if (!wlanConnected)
+    {
+      PT_SCHEDULE(initWlan(&ptInitWlan));
+    }
+    else
+    {
+      // Handle incoming HTTP requests
+      httpServer.handleClient();
+      // Handle incoming messages from Arduino
+      PT_SCHEDULE(handleIncomingMessage(&ptHandleIncomingMessage));
+      Serial.println("READY");
+    }
   }
 }
