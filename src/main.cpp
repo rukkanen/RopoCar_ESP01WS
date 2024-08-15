@@ -16,6 +16,7 @@ String mode = "guard";
 // Wlan and serial connection status
 static bool wlanConnected = false;
 static bool serialConnected = false;
+static bool readyNotified = false;
 
 // Placeholder battery voltage variables
 float motorBatteryVoltage = 0.0;
@@ -243,7 +244,11 @@ void loop()
       httpServer.handleClient();
       // Handle incoming messages from Arduino
       PT_SCHEDULE(handleIncomingMessage(&ptHandleIncomingMessage));
-      Serial.println("READY");
+      if (!readyNotified)
+      {
+        Serial.println("READY");
+        readyNotified = true;
+      }
     }
   }
 }
