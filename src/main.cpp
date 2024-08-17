@@ -179,7 +179,7 @@ PT_THREAD(initWlan(struct pt *pt))
       wlanConnected = true;
       initHttpServer();
       Serial.println("initWlan:ok");
-      Serial.println("msg: WLAN connected: IP address: " + WiFi.localIP().toString());
+      Serial.println("msg: WLAN connffected: IP address: " + WiFi.localIP().toString());
       PT_EXIT(pt);
     }
   }
@@ -200,9 +200,9 @@ PT_THREAD(pingPong(struct pt *pt))
       message.trim();
       if (message == "ping")
       {
-        Serial.println("pong");
-        Serial.println("pong");
-        delay(2000);
+        // Serial.println("pong");
+        // Serial.println("pong");
+        // delay(2000);
         Serial.println("pong"); // Respond to ping with pong
         serialConnected = true;
         PT_EXIT(pt); // Exit the protothread
@@ -210,7 +210,7 @@ PT_THREAD(pingPong(struct pt *pt))
     }
     startTime = millis();
     // PT_WAIT_UNTIL(pt, millis() - startTime >= 2500); // Wait 2500ms before looping again
-    PT_YIELD_UNTIL(pt, millis() - startTime >= 1000);
+    PT_WAIT_UNTIL(pt, millis() - startTime >= 1000);
     startTime = millis();
   }
 
@@ -220,7 +220,8 @@ PT_THREAD(pingPong(struct pt *pt))
 void setup()
 {
   Serial.begin(9600);
-  delay(1000);
+  Serial.println("Booting up...");
+  delay(2000);
   PT_INIT(&ptPingPong);
   PT_INIT(&ptInitWlan);
   PT_INIT(&ptHandleIncomingMessage);
